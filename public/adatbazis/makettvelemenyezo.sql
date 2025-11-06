@@ -30,6 +30,8 @@ SET time_zone = "+00:00";
 CREATE TABLE `felhasznalok` (
   `flhsznl_id` int(11) NOT NULL,
   `flhsznl_nev` varchar(45) NOT NULL,
+  `flhsznl_keresztnev` varchar(45) NOT NULL,
+  `flhsznl_vezeteknev` varchar(45) NOT NULL,
   `flhsznl_email` varchar(45) NOT NULL,
   `flhsznl_jelszo` varchar(60) NOT NULL,
   `flhsznl_regisztraciodatuma` datetime NOT NULL
