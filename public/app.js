@@ -1,11 +1,11 @@
-// ======== Közművek / rövidítések ========
+//  Közművek / rövidítések 
 const $ = (q, el = document) => el.querySelector(q);
 const $$ = (q, el = document) => Array.from(el.querySelectorAll(q));
 
-// ======== Dátum a láblécben ========
+//  Dátum a láblécben 
 $("#year").textContent = String(new Date().getFullYear());
 
-// ======== Állapot ========
+//  Állapot 
 const state = {
   kits: [],
   reviews: [],
@@ -17,7 +17,7 @@ const state = {
   },
 };
 
-// ======== Elemszelektorok ========
+//  Elemszelektorok 
 const els = {
   cards: $("#cards"),
   q: $("#searchInput"),
@@ -33,7 +33,7 @@ const els = {
   kpiReviews: $("#kpiReviews"),
 };
 
-// ======== Perzisztencia ========
+//  Perzisztencia 
 function saveData() {
   localStorage.setItem(
     "makett-data",
@@ -43,7 +43,7 @@ function saveData() {
 
 async function loadData() {
   try {
-    const res = await fetch("data.json");
+    const res = await fetch("/adatbazis/makettvelemenyezo.sql");
     const base = await res.json();
 
     const savedRaw = localStorage.getItem("makett-data") || "{}";
@@ -70,7 +70,7 @@ async function loadData() {
   }
 }
 
-// ======== Számítások / segédek ========
+//  Számítások / segédek 
 function computeAvgRating(kitId) {
   const list = state.reviews.filter((r) => r.kitId === kitId);
   if (!list.length) return 0;
@@ -169,14 +169,14 @@ function cardTemplate(k) {
   `;
 }
 
-// ======== Renderelés ========
+//  Renderelés 
 function render() {
   const list = applyFilters(state.kits);
   els.cards.innerHTML =
     list.map(cardTemplate).join("") || `<p>Nincs találat.</p>`;
 }
 
-// ======== Eseménykezelők ========
+//  Eseménykezelők 
 // Kereső / szűrők / rendezés
 els.q.addEventListener("input", (e) => {
   state.filters.q = e.target.value;
@@ -277,5 +277,5 @@ els.addKitForm?.addEventListener("submit", (e) => {
   render();
 });
 
-// ======== Inicializálás ========
+//  Inicializálás 
 loadData();
