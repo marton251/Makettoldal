@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useAdat } from "../context/AdatContext";
 import { useAuth } from "../context/AuthContext";
 
-
+// Egyszerű csillagválasztó komponens értékeléshez
 function CsillagValaszto({ value, onChange }) {
   const aktivErtek = Number(value) || 0;
 
@@ -14,9 +14,9 @@ function CsillagValaszto({ value, onChange }) {
         const aktiv = csillagErtek <= aktivErtek;
         return (
           <button
+            key={csillagErtek}
             type="button"
-            key={idx}
-            className={aktiv ? "star-btn filled" : "star-btn"}
+            className={aktiv ? "star active" : "star"}
             onClick={() => onChange(csillagErtek)}
           >
             {aktiv ? "★" : "☆"}
@@ -27,106 +27,134 @@ function CsillagValaszto({ value, onChange }) {
   );
 }
 
-
-
-function Csillagok({ ertek }) {
-  const teljes = Math.round(ertek || 0);
-  return (
-    <span>
-      {Array.from({ length: 5 }).map((_, idx) => (
-        <span key={idx}>{idx < teljes ? "★" : "☆"}</span>
-      ))}
-    </span>
-  );
-}
-
 export default function Makettek() {
   const {
     makettek,
     velemenyek,
-    kedvencek,
-    betoltesFolyamatban,
-    hiba,
+    betoltAlapAdatok,
     szamolAtlagErtekeles,
     hozzaadVelemeny,
     modositVelemeny,
     torolVelemeny,
+    kedvencek,
     betoltKedvencek,
-    valtKedvenc,
+    hozzaadKedvenc,
+    torolKedvenc,
+    betoltesFolyamatban,
+    hiba,
   } = useAdat();
 
-  const { felhasznalo, bejelentkezve } = useAuth();
-  const admin = felhasznalo?.szerepkor_id === 2;
+  const { bejelentkezve, felhasznalo } = useAuth();
 
+  // Szűrők
   const [kategoriaSzuro, beallitKategoriaSzuro] = useState("osszes");
+  const [skalaSzuro, beallitSkalaSzuro] = useState("osszes");
   const [kereses, beallitKereses] = useState("");
+  const [minAtlagErtekeles, beallitMinAtlagErtekeles] = useState(0);
   const [rendezes, beallitRendezes] = useState("nev");
+
+  // Vélemények / kedvencek UI state
   const [kivalasztottMakettId, beallitKivalasztottMakettId] = useState(null);
 
   const [ujVelemenySzoveg, beallitUjVelemenySzoveg] = useState("");
   const [ujVelemenyErtekeles, beallitUjVelemenyErtekeles] = useState(5);
 
-  const [szerkesztettVelemenyId, beallitSzerkesztettVelemenyId] = useState(null);
+  const [szerkesztettVelemenyId, beallitSzerkesztettVelemenyId] =
+    useState(null);
   const [szerkesztettSzoveg, beallitSzerkesztettSzoveg] = useState("");
   const [szerkesztettErtekeles, beallitSzerkesztettErtekeles] = useState(5);
 
-  const [szerkesztettMakett, beallitSzerkesztettMakett] = useState(null);
+  const isAdmin =
+    felhasznalo?.szerepkorId === 2 || felhasznalo?.szerepkor_id === 2;
 
-useEffect(() => {
-  if (bejelentkezve) {
-    betoltKedvencek();
-  }
-}, [bejelentkezve]);
+  // Betöltés első rendernél
+  useEffect(() => {
+    betoltAlapAdatok();
+  }, [betoltAlapAdatok]);
 
+  useEffect(() => {
+    if (bejelentkezve) {
+      betoltKedvencek();
+    }
+  }, [bejelentkezve, betoltKedvencek]);
 
+  // Makettek szűrése és rendezése
   const szurtMakettek = useMemo(() => {
-    let lista = [...makettek];
+    let lista = [...(makettek || [])];
 
     if (kategoriaSzuro !== "osszes") {
       lista = lista.filter((m) => m.kategoria === kategoriaSzuro);
     }
 
+    if (skalaSzuro !== "osszes") {
+      lista = lista.filter((m) => m.skala === skalaSzuro);
+    }
+
     if (kereses.trim() !== "") {
       const q = kereses.trim().toLowerCase();
-      lista = lista.filter(
-        (m) =>
-          m.nev.toLowerCase().includes(q) ||
-          m.gyarto.toLowerCase().includes(q)
-      );
+      lista = lista.filter((m) => {
+        const nev = m.nev?.toLowerCase() || "";
+        const gyarto = m.gyarto?.toLowerCase() || "";
+        return nev.includes(q) || gyarto.includes(q);
+      });
+    }
+
+    if (minAtlagErtekeles > 0) {
+      lista = lista.filter((m) => {
+        const atlag = szamolAtlagErtekeles
+          ? szamolAtlagErtekeles(m.id) || 0
+          : 0;
+        return atlag >= minAtlagErtekeles;
+      });
     }
 
     lista.sort((a, b) => {
       if (rendezes === "nev") {
-        return a.nev.localeCompare(b.nev);
+        return (a.nev || "").localeCompare(b.nev || "");
       }
       if (rendezes === "ev") {
         return (b.megjelenes_eve || 0) - (a.megjelenes_eve || 0);
       }
       if (rendezes === "ertekeles") {
-        const aAtlag = szamolAtlagErtekeles(a.id) || 0;
-        const bAtlag = szamolAtlagErtekeles(b.id) || 0;
+        const aAtlag = szamolAtlagErtekeles
+          ? szamolAtlagErtekeles(a.id) || 0
+          : 0;
+        const bAtlag = szamolAtlagErtekeles
+          ? szamolAtlagErtekeles(b.id) || 0
+          : 0;
         return bAtlag - aAtlag;
       }
       return 0;
     });
 
     return lista;
-  }, [makettek, kategoriaSzuro, kereses, rendezes, szamolAtlagErtekeles]);
+  }, [
+    makettek,
+    kategoriaSzuro,
+    skalaSzuro,
+    kereses,
+    minAtlagErtekeles,
+    rendezes,
+    szamolAtlagErtekeles,
+  ]);
 
-  const aktivMakett =
-    kivalasztottMakettId != null
-      ? makettek.find((m) => m.id === kivalasztottMakettId)
-      : null;
+  // Egy maketthez tartozó vélemények
+  function makettVelemenyek(makettId) {
+    return (velemenyek || []).filter((v) => v.makett_id === makettId);
+  }
 
-  const aktivMakettVelemenyek = useMemo(
-    () =>
-      velemenyek.filter(
-        (v) => v.makett_id === kivalasztottMakettId
-      ),
-    [velemenyek, kivalasztottMakettId]
-  );
+  function formatDatum(datumStr) {
+    if (!datumStr) return "";
+    const d = new Date(datumStr);
+    if (Number.isNaN(d.getTime())) return datumStr;
+    return d.toLocaleDateString("hu-HU", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+  }
 
-  function kezeliMegnyitVelemenyek(makettId) {
+  function kezeliMakettValasztas(makettId) {
     if (kivalasztottMakettId === makettId) {
       beallitKivalasztottMakettId(null);
     } else {
@@ -148,14 +176,15 @@ useEffect(() => {
       beallitUjVelemenySzoveg("");
       beallitUjVelemenyErtekeles(5);
     } catch (err) {
-      alert(err.message);
+      console.error("Vélemény mentési hiba:", err);
+      alert("Hiba történt a vélemény mentésekor.");
     }
   }
 
   function kezeliVelemenySzerkesztesInditasa(velemeny) {
     beallitSzerkesztettVelemenyId(velemeny.id);
-    beallitSzerkesztettSzoveg(velemeny.szoveg);
-    beallitSzerkesztettErtekeles(velemeny.ertekeles);
+    beallitSzerkesztettSzoveg(velemeny.szoveg || "");
+    beallitSzerkesztettErtekeles(velemeny.ertekeles || 5);
   }
 
   async function kezeliVelemenySzerkesztesKuldes(e) {
@@ -168,453 +197,349 @@ useEffect(() => {
       });
       beallitSzerkesztettVelemenyId(null);
     } catch (err) {
-      alert(err.message);
+      console.error("Vélemény módosítási hiba:", err);
+      alert("Hiba történt a vélemény módosításakor.");
     }
   }
 
   async function kezeliVelemenyTorles(velemenyId) {
-    if (!window.confirm("Biztosan törlöd a véleményt?")) return;
+    if (!window.confirm("Biztosan törlöd ezt a véleményt?")) return;
     try {
       await torolVelemeny(velemenyId);
     } catch (err) {
-      alert(err.message);
+      console.error("Vélemény törlési hiba:", err);
+      alert("Hiba történt a vélemény törlésekor.");
     }
   }
 
-  async function kezeliKedvencValtas(makettId) {
-    try {
-      await valtKedvenc(makettId);
-    } catch (err) {
-      alert(err.message);
-    }
-  }
-
-  function kezeliMakettSzerkesztesInditasa(makett) {
-    beallitSzerkesztettMakett(
-      makett || {
-        id: null,
-        nev: "",
-        gyarto: "",
-        kategoria: "harckocsi",
-        skala: "1:35",
-        nehezseg: 3,
-        megjelenes_eve: new Date().getFullYear(),
-        kep_url: "",
-      }
+  function velemenySzerzoSajat(velemeny) {
+    if (!felhasznalo || !velemeny) return false;
+    return (
+      velemeny.felhasznalo_id === felhasznalo.id ||
+      velemeny.felhasznaloId === felhasznalo.id
     );
   }
 
-  async function kezeliMakettMentese(e) {
-    e.preventDefault();
-    if (!szerkesztettMakett) return;
+  function makettKedvenc(makettId) {
+    if (!kedvencek) return false;
+    // lehet, hogy ID-k listája vagy objektumok listája
+    if (kedvencek.some && typeof kedvencek[0] === "object") {
+      return kedvencek.some(
+        (k) => k.makett_id === makettId || k.id === makettId
+      );
+    }
+    return kedvencek.includes(makettId);
+  }
 
-    const token = localStorage.getItem("token");
-    if (!token) {
-      alert("Csak bejelentkezett admin szerkeszthet maketteket.");
+  async function kezeliKedvencValtas(makettId) {
+    if (!bejelentkezve) {
+      alert("Kedvencekhez kérlek jelentkezz be.");
       return;
     }
-
-    const {
-      id,
-      nev,
-      gyarto,
-      kategoria,
-      skala,
-      nehezseg,
-      megjelenes_eve,
-      kep_url,
-    } = szerkesztettMakett;
-
-    const payload = {
-      nev,
-      gyarto,
-      kategoria,
-      skala,
-      nehezseg: Number(nehezseg),
-      megjelenes_eve: Number(megjelenes_eve),
-      kep_url: kep_url || null,
-    };
-
-    const url = id
-      ? `http://localhost:3001/api/makettek/${id}`
-      : "http://localhost:3001/api/makettek";
-    const method = id ? "PUT" : "POST";
-
-    const valasz = await fetch(url, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!valasz.ok) {
-      const hiba = await valasz.json().catch(() => ({}));
-      alert(hiba.uzenet || "Hiba a makett mentése során.");
-      return;
+    try {
+      if (makettKedvenc(makettId)) {
+        await torolKedvenc(makettId);
+      } else {
+        await hozzaadKedvenc(makettId);
+      }
+    } catch (err) {
+      console.error("Kedvenc váltási hiba:", err);
+      alert("Hiba történt a kedvencek módosításakor.");
     }
-
-    await valasz.json().catch(() => null);
-    window.location.reload();
   }
 
   return (
     <section className="page">
-      <h1>Makettek</h1>
+      <header className="page-header">
+        <h1>Makettek</h1>
+        <p>
+          Böngészd a maketteket, olvasd el mások véleményét, és írd meg a saját
+          tapasztalataidat!
+        </p>
+      </header>
 
-      {hiba && <p className="error">{hiba}</p>}
-      {betoltesFolyamatban && <p>Betöltés folyamatban...</p>}
+      {/* Szűrők */}
+      <section className="card filters">
+        <div className="filters-row">
+          <input
+            type="text"
+            placeholder="Keresés név vagy gyártó alapján..."
+            value={kereses}
+            onChange={(e) => beallitKereses(e.target.value)}
+          />
 
-      <div className="filters">
-        <input
-          type="text"
-          placeholder="Keresés név vagy gyártó alapján..."
-          value={kereses}
-          onChange={(e) => beallitKereses(e.target.value)}
-        />
+          <select
+            value={kategoriaSzuro}
+            onChange={(e) => beallitKategoriaSzuro(e.target.value)}
+          >
+            <option value="osszes">Összes kategória</option>
+            <option value="harckocsi">Harckocsi</option>
+            <option value="repülő">Repülő</option>
+            <option value="hajó">Hajó</option>
+            <option value="figura">Figura</option>
+          </select>
 
-        <select
-          value={kategoriaSzuro}
-          onChange={(e) => beallitKategoriaSzuro(e.target.value)}
-        >
-          <option value="osszes">Összes kategória</option>
-          <option value="harckocsi">Harckocsi</option>
-          <option value="repülő">Repülő</option>
-          <option value="hajó">Hajó</option>
-        </select>
+          <select
+            value={skalaSzuro}
+            onChange={(e) => beallitSkalaSzuro(e.target.value)}
+          >
+            <option value="osszes">Összes skála</option>
+            <option value="1:35">1:35</option>
+            <option value="1:72">1:72</option>
+            <option value="1:48">1:48</option>
+            <option value="1:350">1:350</option>
+          </select>
 
-        <select
-          value={rendezes}
-          onChange={(e) => beallitRendezes(e.target.value)}
-        >
-          <option value="nev">Név szerint</option>
-          <option value="ev">Megjelenés éve szerint</option>
-          <option value="ertekeles">Átlagértékelés szerint</option>
-        </select>
-      </div>
+          <select
+            value={minAtlagErtekeles}
+            onChange={(e) =>
+              beallitMinAtlagErtekeles(Number(e.target.value))
+            }
+          >
+            <option value={0}>Bármilyen értékelés</option>
+            <option value={3}>Min. 3★</option>
+            <option value={4}>Min. 4★</option>
+            <option value={4.5}>Min. 4.5★</option>
+          </select>
 
-      {admin && (
-        <div className="admin-section">
-          <h2>Admin – makett felvétele / szerkesztése</h2>
-          <button onClick={() => kezeliMakettSzerkesztesInditasa(null)}>
-            Új makett
-          </button>
-          {szerkesztettMakett && (
-            <form onSubmit={kezeliMakettMentese} className="card form">
-              <label>
-                Név
-                <input
-                  type="text"
-                  value={szerkesztettMakett.nev}
-                  onChange={(e) =>
-                    beallitSzerkesztettMakett((m) => ({
-                      ...m,
-                      nev: e.target.value,
-                    }))
-                  }
-                  required
-                />
-              </label>
-              <label>
-                Gyártó
-                <input
-                  type="text"
-                  value={szerkesztettMakett.gyarto}
-                  onChange={(e) =>
-                    beallitSzerkesztettMakett((m) => ({
-                      ...m,
-                      gyarto: e.target.value,
-                    }))
-                  }
-                  required
-                />
-              </label>
-              <label>
-                Kategória
-                <select
-                  value={szerkesztettMakett.kategoria}
-                  onChange={(e) =>
-                    beallitSzerkesztettMakett((m) => ({
-                      ...m,
-                      kategoria: e.target.value,
-                    }))
-                  }
-                >
-                  <option value="harckocsi">Harckocsi</option>
-                  <option value="repülő">Repülő</option>
-                  <option value="hajó">Hajó</option>
-                </select>
-              </label>
-              <label>
-                Skála
-                <input
-                  type="text"
-                  value={szerkesztettMakett.skala}
-                  onChange={(e) =>
-                    beallitSzerkesztettMakett((m) => ({
-                      ...m,
-                      skala: e.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                Nehézség (1–5)
-                <input
-                  type="number"
-                  min="1"
-                  max="5"
-                  value={szerkesztettMakett.nehezseg}
-                  onChange={(e) =>
-                    beallitSzerkesztettMakett((m) => ({
-                      ...m,
-                      nehezseg: e.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                Megjelenés éve
-                <input
-                  type="number"
-                  value={szerkesztettMakett.megjelenes_eve}
-                  onChange={(e) =>
-                    beallitSzerkesztettMakett((m) => ({
-                      ...m,
-                      megjelenes_eve: e.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                Kép URL
-                <input
-                  type="url"
-                  value={szerkesztettMakett.kep_url}
-                  onChange={(e) =>
-                    beallitSzerkesztettMakett((m) => ({
-                      ...m,
-                      kep_url: e.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <button type="submit">Makett mentése</button>
-            </form>
-          )}
+          <select
+            value={rendezes}
+            onChange={(e) => beallitRendezes(e.target.value)}
+          >
+            <option value="nev">Név szerint</option>
+            <option value="ev">Megjelenés éve szerint</option>
+            <option value="ertekeles">Átlagértékelés szerint</option>
+          </select>
         </div>
+      </section>
+
+      {betoltesFolyamatban && <p>Betöltés folyamatban...</p>}
+      {hiba && (
+        <p className="error">
+          Hiba történt az adatok betöltésekor: {hiba}
+        </p>
       )}
 
-      <div className="grid">
-  {betoltesFolyamatban
-    ? Array.from({ length: 3 }).map((_, idx) => (
-        <article key={idx} className="card skeleton">
-          <div className="skeleton-line skeleton-title" />
-          <div className="skeleton-line" />
-          <div className="skeleton-line" />
-          <div className="skeleton-line short" />
-        </article>
-      ))
-    : szurtMakettek.map((m) => {
-        const atlag = szamolAtlagErtekeles(m.id);
-        const kedvenc = kedvencek.includes(m.id);
-        return (
-          <article key={m.id} className="card">
-            <header className="card-header">
-              <h2>{m.nev}</h2>
-              {bejelentkezve && (
-                <button
-                  className={kedvenc ? "fav-btn active" : "fav-btn"}
-                  type="button"
-                  onClick={() => kezeliKedvencValtas(m.id)}
-                  title={
-                    kedvenc
-                      ? "Eltávolítás a kedvencek közül"
-                      : "Hozzáadás a kedvencekhez"
-                  }
-                >
-                  {kedvenc ? "❤️" : "🤍"}
-                </button>
-              )}
-            </header>
-            <p>
-              <strong>Gyártó:</strong> {m.gyarto}
-            </p>
-            <p>
-              <strong>Kategória:</strong> {m.kategoria} –{" "}
-              <strong>Skála:</strong> {m.skala}
-            </p>
-            <p>
-              <strong>Nehézség:</strong> {m.nehezseg} / 5
-            </p>
-            <p>
-              <strong>Megjelenés éve:</strong> {m.megjelenes_eve}
-            </p>
-            <p>
-              <strong>Átlagértékelés:</strong>{" "}
-              {atlag ? (
-                <>
-                  {atlag.toFixed(1)} <Csillagok ertek={atlag} />
-                </>
-              ) : (
-                "még nincs értékelés"
-              )}
-            </p>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => kezeliMegnyitVelemenyek(m.id)}
-            >
-              Vélemények megtekintése
-            </button>
-            {admin && (
-              <button
-                type="button"
-                className="btn secondary"
-                onClick={() => kezeliMakettSzerkesztesInditasa(m)}
-              >
-                Makett szerkesztése
-              </button>
-            )}
-          </article>
-        );
-      })}
-</div>
+      {/* Makett lista */}
+      <section className="card-grid">
+        {szurtMakettek.length === 0 ? (
+          <p>Nincsenek a szűrésnek megfelelő makettek.</p>
+        ) : (
+          szurtMakettek.map((m) => {
+            const atlag = szamolAtlagErtekeles
+              ? szamolAtlagErtekeles(m.id) || 0
+              : 0;
+            const velemenyLista = makettVelemenyek(m.id);
+            const nyitva = kivalasztottMakettId === m.id;
+            const kedvenc = makettKedvenc(m.id);
 
+            return (
+              <article key={m.id} className="card makett-card">
+                <div className="makett-fejlec">
+                  <div>
+                    <h2>{m.nev}</h2>
+                    <p className="small">
+                      {m.gyarto} • {m.skala} • {m.kategoria}
+                    </p>
+                    <p className="small">
+                      Nehézség: {m.nehezseg}/5 • Megjelenés éve:{" "}
+                      {m.megjelenes_eve}
+                    </p>
+                  </div>
 
-      {aktivMakett && (
-        <section className="velemeny-panel">
-          <h2>{aktivMakett.nev} – vélemények</h2>
+                  <div className="makett-ertekeles">
+                    <CsillagValaszto value={atlag} onChange={() => {}} />
+                    <p className="small">
+                      Átlag: {atlag.toFixed(1)} ({velemenyLista.length} vélemény)
+                    </p>
+                  </div>
+                </div>
 
-          <div className="velemeny-lista">
-            {aktivMakettVelemenyek.length === 0 ? (
-              <p>Még nem érkezett vélemény ehhez a maketthez.</p>
-            ) : (
-              aktivMakettVelemenyek.map((v) => {
-                const sajat =
-                  felhasznalo &&
-                  (v.felhasznalo_id === felhasznalo.id || admin);
-                const datum = v.letrehozva
-                  ? new Date(v.letrehozva).toLocaleString("hu-HU")
-                  : "";
+                {m.kep_url && (
+                  <div className="makett-kep-wrapper">
+                    <img
+                      src={m.kep_url}
+                      alt={m.nev}
+                      className="makett-kep"
+                    />
+                  </div>
+                )}
 
-                if (szerkesztettVelemenyId === v.id) {
-                  return (
-                    <form
-                      key={v.id}
-                      onSubmit={kezeliVelemenySzerkesztesKuldes}
-                      className="card form"
-                    >
-                      <h3>Vélemény szerkesztése</h3>
-                      <label>
-                        Értékelés (1–5)
-                        <CsillagValaszto
-                        value={szerkesztettErtekeles}
-                        onChange={(ertek) => beallitSzerkesztettErtekeles(ertek)}
-                          />
-                      </label>
+                <div className="button-row">
+                  <button
+                    type="button"
+                    className={kedvenc ? "btn secondary" : "btn"}
+                    onClick={() => kezeliKedvencValtas(m.id)}
+                  >
+                    {kedvenc ? "Kedvencekből eltávolítás" : "Kedvencekhez adás"}
+                  </button>
 
-                      <label>
-                        Értékelés (1–5)
-                        <input
-                          type="number"
-                          min="1"
-                          max="5"
-                          value={szerkesztettErtekeles}
-                          onChange={(e) =>
-                            beallitSzerkesztettErtekeles(e.target.value)
+                  <button
+                    type="button"
+                    className="btn secondary"
+                    onClick={() => kezeliMakettValasztas(m.id)}
+                  >
+                    {nyitva ? "Vélemények elrejtése" : "Vélemények megtekintése"}
+                  </button>
+                </div>
+
+                {nyitva && (
+                  <section className="velemenyek-szekcio">
+                    <h3>Vélemények</h3>
+
+                    {velemenyLista.length === 0 ? (
+                      <p>Még nem érkezett vélemény ehhez a maketthez.</p>
+                    ) : (
+                      <ul className="velemeny-lista">
+                        {velemenyLista.map((v) => {
+                          const szerzoSajat = velemenySzerzoSajat(v);
+                          const szerkesztheto = szerzoSajat || isAdmin;
+
+                          if (szerkesztettVelemenyId === v.id) {
+                            return (
+                              <li key={v.id} className="card velemeny-card">
+                                <form
+                                  onSubmit={kezeliVelemenySzerkesztesKuldes}
+                                  className="form"
+                                >
+                                  <h4>Vélemény szerkesztése</h4>
+
+                                  <label>
+                                    Értékelés (1–5)
+                                    <CsillagValaszto
+                                      value={szerkesztettErtekeles}
+                                      onChange={(ertek) =>
+                                        beallitSzerkesztettErtekeles(ertek)
+                                      }
+                                    />
+                                  </label>
+
+                                  <label>
+                                    Vélemény szövege
+                                    <textarea
+                                      value={szerkesztettSzoveg}
+                                      onChange={(e) =>
+                                        beallitSzerkesztettSzoveg(
+                                          e.target.value
+                                        )
+                                      }
+                                      rows={4}
+                                      required
+                                    />
+                                  </label>
+
+                                  <div className="button-row">
+                                    <button type="submit" className="btn">
+                                      Mentés
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn secondary"
+                                      onClick={() =>
+                                        beallitSzerkesztettVelemenyId(null)
+                                      }
+                                    >
+                                      Mégse
+                                    </button>
+                                  </div>
+                                </form>
+                              </li>
+                            );
                           }
-                          required
-                        />
-                      </label>
-                      <div className="button-row">
-                        <button type="submit" className="btn">
-                          Mentés
-                        </button>
-                        <button
-                          type="button"
-                          className="btn secondary"
-                          onClick={() =>
-                            beallitSzerkesztettVelemenyId(null)
-                          }
-                        >
-                          Mégse
-                        </button>
-                      </div>
-                    </form>
-                  );
-                }
 
-                return (
-                  <article key={v.id} className="card">
-                    <header className="card-header">
-                      <strong>{v.felhasznalo_nev}</strong>
-                      <span>
-                        {v.ertekeles} / 5 <Csillagok ertek={v.ertekeles} />
-                      </span>
-                    </header>
-                    <p>{v.szoveg}</p>
-                    <small>{datum}</small>
-                    {sajat && (
-                      <div className="button-row">
-                        <button
-                          type="button"
-                          className="btn secondary"
-                          onClick={() => kezeliVelemenySzerkesztesInditasa(v)}
-                        >
-                          Szerkesztés
-                        </button>
-                        <button
-                          type="button"
-                          className="btn danger"
-                          onClick={() => kezeliVelemenyTorles(v.id)}
-                        >
-                          Törlés
-                        </button>
-                      </div>
+                          return (
+                            <li key={v.id} className="card velemeny-card">
+                              <header className="velemeny-fejlec">
+                                <div>
+                                  <strong>{v.felhasznalo_nev}</strong>
+                                  <p className="small">
+                                    {formatDatum(v.letrehozva)}
+                                  </p>
+                                </div>
+                                <div>
+                                  <CsillagValaszto
+                                    value={v.ertekeles}
+                                    onChange={() => {}}
+                                  />
+                                </div>
+                              </header>
+
+                              <p>{v.szoveg}</p>
+
+                              {szerkesztheto && (
+                                <div className="button-row">
+                                  <button
+                                    type="button"
+                                    className="btn secondary"
+                                    onClick={() =>
+                                      kezeliVelemenySzerkesztesInditasa(v)
+                                    }
+                                  >
+                                    Szerkesztés
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn danger"
+                                    onClick={() =>
+                                      kezeliVelemenyTorles(v.id)
+                                    }
+                                  >
+                                    Törlés
+                                  </button>
+                                </div>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
                     )}
-                  </article>
-                );
-              })
-            )}
-          </div>
 
-          {bejelentkezve ? (
-            <form onSubmit={kezeliUjVelemenyKuldes} className="card form">
-              <h3>Új vélemény írása</h3>
-                <label>
-    Értékelés (1–5)
-    <CsillagValaszto
-      value={ujVelemenyErtekeles}
-      onChange={(ertek) => beallitUjVelemenyErtekeles(ertek)}
-    />
-  </label>
+                    {bejelentkezve ? (
+                      <form
+                        onSubmit={kezeliUjVelemenyKuldes}
+                        className="card form"
+                      >
+                        <h3>Új vélemény írása</h3>
 
-              <label>
-                Értékelés (1–5)
-                <input
-                  type="number"
-                  min="1"
-                  max="5"
-                  value={ujVelemenyErtekeles}
-                  onChange={(e) =>
-                    beallitUjVelemenyErtekeles(e.target.value)
-                  }
-                  required
-                />
-              </label>
-              <button type="submit" className="btn">
-                Vélemény elküldése
-              </button>
-            </form>
-          ) : (
-            <p>
-              Vélemény írásához <Link to="/bejelentkezes">jelentkezz be</Link>.
-            </p>
-          )}
-        </section>
-      )}
+                        <label>
+                          Értékelés (1–5)
+                          <CsillagValaszto
+                            value={ujVelemenyErtekeles}
+                            onChange={(ertek) =>
+                              beallitUjVelemenyErtekeles(ertek)
+                            }
+                          />
+                        </label>
+
+                        <label>
+                          Vélemény szövege
+                          <textarea
+                            value={ujVelemenySzoveg}
+                            onChange={(e) =>
+                              beallitUjVelemenySzoveg(e.target.value)
+                            }
+                            rows={4}
+                            required
+                          />
+                        </label>
+
+                        <button type="submit" className="btn">
+                          Vélemény elküldése
+                        </button>
+                      </form>
+                    ) : (
+                      <p>
+                        Vélemény írásához{" "}
+                        <Link to="/bejelentkezes">jelentkezz be</Link>.
+                      </p>
+                    )}
+                  </section>
+                )}
+              </article>
+            );
+          })
+        )}
+      </section>
     </section>
   );
 }

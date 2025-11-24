@@ -1,7 +1,9 @@
 import React from "react";
 import { Routes, Route, NavLink, Link } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
-
+import SajatVelemenyek from "./pages/SajatVelemenyek";
+import Kedvencek from "./pages/Kedvencek";
+import EpitesiNaplo from "./pages/EpitesiNaplo";
 import Kezdolap from "./pages/Kezdolap";
 import Makettek from "./pages/Makettek";
 import Bejelentkezes from "./pages/Bejelentkezes";
@@ -72,6 +74,21 @@ export default function App() {
             Fórum
           </NavLink>
 
+          {bejelentkezve && (
+            <>
+              <NavLink to="/kedvencek" className="nav-link">
+                Kedvenceim
+              </NavLink>
+              <NavLink to="/velemenyeim" className="nav-link">
+                Véleményeim
+              </NavLink>
+              <NavLink to="/epitesinaplo" className="nav-link">
+                Építési napló
+              </NavLink>
+            </>
+          )}
+
+
           {admin && <span className="nav-badge">Admin</span>}
         </div>
 
@@ -105,14 +122,18 @@ export default function App() {
       </header>
 
       <main className="main">
-        <Routes>
+          <Routes>
           <Route path="/" element={<Kezdolap />} />
           <Route path="/makettek" element={<Makettek />} />
           <Route path="/bejelentkezes" element={<Bejelentkezes />} />
           <Route path="/regisztracio" element={<Regisztracio />} />
           <Route path="/profil" element={<Profil />} />
           <Route path="/forum" element={<Forum />} />
+          <Route path="/velemenyeim" element={<SajatVelemenyek />} />
+          <Route path="/kedvencek" element={<Kedvencek />} />
+          <Route path="/epitesinaplo" element={<EpitesiNaplo />} />
         </Routes>
+
       </main>
 
       {/* Lebegő AI chat minden oldalon */}

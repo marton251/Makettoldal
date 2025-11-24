@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 
 const API_BASE_URL = "http://localhost:3001/api";
@@ -12,12 +12,15 @@ export default function Forum() {
 
   const [ujTemaCim, beallitUjTemaCim] = useState("");
   const [ujTemaLeiras, beallitUjTemaLeiras] = useState("");
+  const [ujTemaKategoria, beallitUjTemaKategoria] = useState("általános");
 
   const [ujUzenetSzoveg, beallitUjUzenetSzoveg] = useState("");
+  const [temaKereses, beallitTemaKereses] = useState("");
 
   const [betoltes, beallitBetoltes] = useState(false);
   const [hiba, beallitHiba] = useState(null);
 
+  // Témák betöltése
   async function betoltTemak() {
     try {
       beallitBetoltes(true);
@@ -33,6 +36,7 @@ export default function Forum() {
     }
   }
 
+  // Kiválasztott téma üzenetei
   async function betoltUzenetek(temaId) {
     try {
       beallitBetoltes(true);
@@ -40,8 +44,9 @@ export default function Forum() {
       const valasz = await fetch(
         `${API_BASE_URL}/forum/temak/${temaId}/uzenetek`
       );
-      if (!valasz.ok)
+      if (!valasz.ok) {
         throw new Error("Nem sikerült lekérni a hozzászólásokat.");
+      }
       const adat = await valasz.json();
       beallitUzenetek(adat);
     } catch (err) {
@@ -65,6 +70,7 @@ export default function Forum() {
     }
   }
 
+  // Új téma küldése
   async function kezeliUjTemaKuldes(e) {
     e.preventDefault();
     if (!bejelentkezve) {
@@ -82,6 +88,7 @@ export default function Forum() {
         body: JSON.stringify({
           cim: ujTemaCim,
           leiras: ujTemaLeiras,
+          kategoria: ujTemaKategoria,
         }),
       });
       if (!valasz.ok) {
@@ -92,11 +99,13 @@ export default function Forum() {
       beallitTemak((elozo) => [uj, ...elozo]);
       beallitUjTemaCim("");
       beallitUjTemaLeiras("");
+      beallitUjTemaKategoria("általános");
     } catch (err) {
       alert(err.message);
     }
   }
 
+  // Új üzenet küldése
   async function kezeliUjUzenetKuldes(e) {
     e.preventDefault();
     if (!bejelentkezve) {
@@ -130,6 +139,23 @@ export default function Forum() {
     }
   }
 
+  // Témák szűrése keresőmező alapján
+  const szurtTemak = useMemo(() => {
+    const q = temaKereses.trim().toLowerCase();
+    if (!q) return temak;
+
+    return temak.filter((t) => {
+      const cim = t.cim?.toLowerCase() || "";
+      const leiras = t.leiras?.toLowerCase() || "";
+      const kat = t.kategoria?.toLowerCase() || "";
+      return (
+        cim.includes(q) ||
+        leiras.includes(q) ||
+        kat.includes(q)
+      );
+    });
+  }, [temak, temaKereses]);
+
   return (
     <section className="page">
       <h1>Fórum</h1>
@@ -155,6 +181,21 @@ export default function Forum() {
               required
             />
           </label>
+
+          <label>
+            Kategória
+            <select
+              value={ujTemaKategoria}
+              onChange={(e) => beallitUjTemaKategoria(e.target.value)}
+            >
+              <option value="általános">Általános</option>
+              <option value="építési napló">Építési napló</option>
+              <option value="festés / weathering">Festés / weathering</option>
+              <option value="kezdők kérdeznek">Kezdők kérdeznek</option>
+              <option value="eszközök / anyagok">Eszközök / anyagok</option>
+            </select>
+          </label>
+
           <label>
             Leírás (nem kötelező)
             <textarea
@@ -162,6 +203,7 @@ export default function Forum() {
               onChange={(e) => beallitUjTemaLeiras(e.target.value)}
             />
           </label>
+
           <button type="submit" className="btn">
             Téma létrehozása
           </button>
@@ -171,11 +213,21 @@ export default function Forum() {
       {/* Témák listája */}
       <div className="card">
         <h2>Témák</h2>
-        {temak.length === 0 ? (
-          <p className="small">Még nincs egy téma sem.</p>
+
+        <div className="filters" style={{ marginBottom: 8 }}>
+          <input
+            type="text"
+            placeholder="Témák keresése cím, leírás vagy kategória alapján..."
+            value={temaKereses}
+            onChange={(e) => beallitTemaKereses(e.target.value)}
+          />
+        </div>
+
+        {szurtTemak.length === 0 ? (
+          <p className="small">Nincs a keresésnek megfelelő téma.</p>
         ) : (
           <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0 }}>
-            {temak.map((t) => {
+            {szurtTemak.map((t) => {
               const aktiv = t.id === kivalasztottTemaId;
               const datum = t.letrehozva
                 ? new Date(t.letrehozva).toLocaleString("hu-HU")
@@ -199,6 +251,11 @@ export default function Forum() {
                   >
                     <div>
                       <strong>{t.cim}</strong>
+                      {t.kategoria && (
+                        <span className="nav-badge" style={{ marginLeft: 8 }}>
+                          {t.kategoria}
+                        </span>
+                      )}
                       <p className="small" style={{ margin: 0 }}>
                         Indította: {t.felhasznalo_nev} – {datum}
                       </p>
@@ -263,7 +320,11 @@ export default function Forum() {
           )}
 
           {bejelentkezve ? (
-            <form onSubmit={kezeliUjUzenetKuldes} className="form" style={{ marginTop: 12 }}>
+            <form
+              onSubmit={kezeliUjUzenetKuldes}
+              className="form"
+              style={{ marginTop: 12 }}
+            >
               <label>
                 Új hozzászólás
                 <textarea

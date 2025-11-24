@@ -1,21 +1,20 @@
 import express from "express";
 import cors from "cors";
 import mysql from "mysql2/promise";
+import rateLimit from "express-rate-limit";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
 
-
 const PORT = 3001;
 const JWT_TITOK = "nagyon_titkos_jwt_kulcs";
-
 
 // --- PROFILKÉP FELTÖLTÉS --- //
 const uploadDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir);
+  fs.mkdirSync(uploadDir, { recursive: true });
 }
 
 const storage = multer.diskStorage({
@@ -24,15 +23,15 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname);
-    const nev = "profil_" + req.user.id + "_" + Date.now() + ext;
+    const id = req.felhasznalo?.id || "ismeretlen";
+    const nev = "profil_" + id + "_" + Date.now() + ext;
     cb(null, nev);
   },
 });
 
 const upload = multer({ storage });
 
-
-
+// --- ADATBÁZIS KAPCSOLAT --- //
 const adatbazisPool = mysql.createPool({
   host: "localhost",
   user: "root",
@@ -48,8 +47,7 @@ async function adatbazisLekeres(sql, parameterek = []) {
   return sorok;
 }
 
-
-
+// --- JWT / AUTH SEGÉDFÜGGVÉNYEK --- //
 function generalToken(felhasznalo) {
   const payload = {
     id: felhasznalo.id,
@@ -84,8 +82,11 @@ function adminMiddleware(req, res, next) {
   next();
 }
 
+// --- ADATBÁZIS INICIALIZÁLÁS --- //
 async function inicializalAdatbazis() {
-  await adatbazisPool.query("CREATE DATABASE IF NOT EXISTS makett CHARACTER SET utf8mb4 COLLATE utf8mb4_hungarian_ci");
+  await adatbazisPool.query(
+    "CREATE DATABASE IF NOT EXISTS makett CHARACTER SET utf8mb4 COLLATE utf8mb4_hungarian_ci"
+  );
   await adatbazisPool.query("USE makett");
 
   await adatbazisPool.query(`
@@ -145,40 +146,59 @@ async function inicializalAdatbazis() {
   `);
 
   await adatbazisPool.query(`
+    CREATE TABLE IF NOT EXISTS epitesi_naplo (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      makett_id INT NOT NULL,
+      felhasznalo_id INT NOT NULL,
+      cim VARCHAR(200) NOT NULL,
+      leiras TEXT NOT NULL,
+      kep_url VARCHAR(255) NULL,
+      letrehozva DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (makett_id) REFERENCES makett(id) ON DELETE CASCADE,
+      FOREIGN KEY (felhasznalo_id) REFERENCES felhasznalo(id) ON DELETE CASCADE
+    )
+  `);
+
+  await adatbazisPool.query(`
     INSERT IGNORE INTO szerepkor (id, nev)
     VALUES (1, 'felhasznalo'), (2, 'admin')
   `);
 
+  // --- ADMIN LÉTREHOZÁSA DUPLIKÁCIÓ NÉLKÜL --- //
+  const adminFelhasznaloNev = "Admin";
   const adminEmail = "admin@pelda.hu";
   const adminJelszo = "admin123";
+
   const adminok = await adatbazisLekeres(
-    "SELECT id FROM felhasznalo WHERE email = ?",
-    [adminEmail]
+    "SELECT id FROM felhasznalo WHERE felhasznalo_nev = ? OR email = ?",
+    [adminFelhasznaloNev, adminEmail]
   );
+
   if (adminok.length === 0) {
     const hash = await bcrypt.hash(adminJelszo, 10);
     await adatbazisLekeres(
       `INSERT INTO felhasznalo (felhasznalo_nev, email, jelszo_hash, szerepkor_id)
        VALUES (?, ?, ?, 2)`,
-      ["Admin", adminEmail, hash]
+      [adminFelhasznaloNev, adminEmail, hash]
     );
     console.log("Létrehozva admin felhasználó (admin@pelda.hu / admin123)");
   }
 
-  const demoEmail = "demo@pelda.hu";
-  const demok = await adatbazisLekeres(
-    "SELECT id FROM felhasznalo WHERE email = ?",
-    [demoEmail]
+ const demoEmail = "demo@pelda.hu";
+const demok = await adatbazisLekeres(
+  "SELECT id FROM felhasznalo WHERE email = ?",
+  [demoEmail]
+);
+if (demok.length === 0) {   
+  const demoHash = await bcrypt.hash("demo123", 10);
+  await adatbazisLekeres(
+    `INSERT INTO felhasznalo (felhasznalo_nev, email, jelszo_hash, szerepkor_id)
+     VALUES (?, ?, ?, 1)`,
+    ["Demó felhasználó", demoEmail, demoHash]
   );
-  if (demok.length === 0) {
-    const demoHash = await bcrypt.hash("demo123", 10);
-    await adatbazisLekeres(
-      `INSERT INTO felhasznalo (felhasznalo_nev, email, jelszo_hash, szerepkor_id)
-       VALUES (?, ?, ?, 1)`,
-      ["Demó felhasználó", demoEmail, demoHash]
-    );
-    console.log("Létrehozva demo felhasználó (demo@pelda.hu / demo123)");
-  }
+  console.log("Létrehozva demo felhasználó (demo@pelda.hu / demo123)");
+}
+
 
   const makettek = await adatbazisLekeres("SELECT COUNT(*) AS db FROM makett");
   if (makettek[0].db === 0) {
@@ -192,11 +212,12 @@ async function inicializalAdatbazis() {
     );
   }
 
-    await adatbazisLekeres(`
+  await adatbazisLekeres(`
     CREATE TABLE IF NOT EXISTS forum_tema (
       id INT AUTO_INCREMENT PRIMARY KEY,
       cim VARCHAR(200) NOT NULL,
       leiras TEXT NULL,
+      kategoria VARCHAR(100) NULL,
       letrehozva DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       felhasznalo_id INT NOT NULL,
       FOREIGN KEY (felhasznalo_id) REFERENCES felhasznalo(id) ON DELETE CASCADE
@@ -215,17 +236,28 @@ async function inicializalAdatbazis() {
     )
   `);
 
-
   console.log("Adatbázis inicializálva.");
 }
 
+// --- APP & RATE LIMIT --- //
 const app = express();
 app.use(cors());
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 app.use(express.json());
 
-// AUTH
+// Rate limit az auth végpontokra (brute force ellen)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 perc
+  max: 20, // max 20 próbálkozás
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { uzenet: "Túl sok próbálkozás. Próbáld meg később." },
+});
 
+app.use("/api/auth/login", authLimiter);
+app.use("/api/auth/register", authLimiter);
+
+// --- AUTH --- //
 app.post("/api/auth/register", async (req, res) => {
   try {
     const { felhasznalo_nev, email, jelszo } = req.body;
@@ -286,17 +318,13 @@ app.post("/api/auth/login", async (req, res) => {
       [email]
     );
     if (felhasznalok.length === 0) {
-      return res
-        .status(400)
-        .json({ uzenet: "Hibás email vagy jelszó." });
+      return res.status(400).json({ uzenet: "Hibás email vagy jelszó." });
     }
 
     const user = felhasznalok[0];
     const egyezik = await bcrypt.compare(jelszo, user.jelszo_hash);
     if (!egyezik) {
-      return res
-        .status(400)
-        .json({ uzenet: "Hibás email vagy jelszó." });
+      return res.status(400).json({ uzenet: "Hibás email vagy jelszó." });
     }
 
     const token = generalToken(user);
@@ -316,13 +344,18 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-
+// --- FÓRUM --- //
 // Fórum – témák listázása
 app.get("/api/forum/temak", async (req, res) => {
   try {
     const temak = await adatbazisLekeres(
-      `SELECT t.id, t.cim, t.leiras, t.letrehozva,
-              t.felhasznalo_id, f.felhasznalo_nev,
+      `SELECT t.id,
+              t.cim,
+              t.leiras,
+              t.kategoria,
+              t.letrehozva,
+              t.felhasznalo_id,
+              f.felhasznalo_nev,
               COUNT(u.id) AS uzenet_db,
               MAX(u.letrehozva) AS utolso_valasz
        FROM forum_tema t
@@ -338,11 +371,10 @@ app.get("/api/forum/temak", async (req, res) => {
   }
 });
 
-
 // Fórum – új téma létrehozása
 app.post("/api/forum/temak", authMiddleware, async (req, res) => {
   try {
-    const { cim, leiras } = req.body;
+    const { cim, leiras, kategoria } = req.body;
     if (!cim || cim.trim() === "") {
       return res.status(400).json({ uzenet: "A cím megadása kötelező." });
     }
@@ -350,15 +382,21 @@ app.post("/api/forum/temak", authMiddleware, async (req, res) => {
     const felhasznaloId = req.felhasznalo.id;
 
     const eredmeny = await adatbazisLekeres(
-      `INSERT INTO forum_tema (cim, leiras, felhasznalo_id)
-       VALUES (?, ?, ?)`,
-      [cim.trim(), leiras || null, felhasznaloId]
+      `INSERT INTO forum_tema (cim, leiras, kategoria, felhasznalo_id)
+       VALUES (?, ?, ?, ?)`,
+      [cim.trim(), leiras || null, kategoria || null, felhasznaloId]
     );
 
     const [uj] = await adatbazisLekeres(
-      `SELECT t.id, t.cim, t.leiras, t.letrehozva,
-              t.felhasznalo_id, f.felhasznalo_nev,
-              0 AS uzenet_db, t.letrehozva AS utolso_valasz
+      `SELECT t.id,
+              t.cim,
+              t.leiras,
+              t.kategoria,
+              t.letrehozva,
+              t.felhasznalo_id,
+              f.felhasznalo_nev,
+              0 AS uzenet_db,
+              t.letrehozva AS utolso_valasz
        FROM forum_tema t
        JOIN felhasznalo f ON f.id = t.felhasznalo_id
        WHERE t.id = ?`,
@@ -392,44 +430,44 @@ app.get("/api/forum/temak/:id/uzenetek", async (req, res) => {
   }
 });
 
-
 // Fórum – új hozzászólás
-app.post("/api/forum/temak/:id/uzenetek", authMiddleware, async (req, res) => {
-  try {
-    const temaId = Number(req.params.id);
-    const { szoveg } = req.body;
-    const felhasznaloId = req.felhasznalo.id;
+app.post(
+  "/api/forum/temak/:id/uzenetek",
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const temaId = Number(req.params.id);
+      const { szoveg } = req.body;
+      const felhasznaloId = req.felhasznalo.id;
 
-    if (!szoveg || szoveg.trim() === "") {
-      return res.status(400).json({ uzenet: "Az üzenet szövege kötelező." });
+      if (!szoveg || szoveg.trim() === "") {
+        return res.status(400).json({ uzenet: "Az üzenet szövege kötelező." });
+      }
+
+      const eredmeny = await adatbazisLekeres(
+        `INSERT INTO forum_uzenet (tema_id, felhasznalo_id, szoveg)
+         VALUES (?, ?, ?)`,
+        [temaId, felhasznaloId, szoveg.trim()]
+      );
+
+      const [uj] = await adatbazisLekeres(
+        `SELECT u.id, u.tema_id, u.felhasznalo_id, u.szoveg, u.letrehozva,
+                f.felhasznalo_nev
+         FROM forum_uzenet u
+         JOIN felhasznalo f ON f.id = u.felhasznalo_id
+         WHERE u.id = ?`,
+        [eredmeny.insertId]
+      );
+
+      res.status(201).json(uj);
+    } catch (err) {
+      console.error("Új fórum üzenet hiba:", err);
+      res.status(500).json({ uzenet: "Hiba az üzenet mentése során." });
     }
-
-    const eredmeny = await adatbazisLekeres(
-      `INSERT INTO forum_uzenet (tema_id, felhasznalo_id, szoveg)
-       VALUES (?, ?, ?)`,
-      [temaId, felhasznaloId, szoveg.trim()]
-    );
-
-    const [uj] = await adatbazisLekeres(
-      `SELECT u.id, u.tema_id, u.felhasznalo_id, u.szoveg, u.letrehozva,
-              f.felhasznalo_nev
-       FROM forum_uzenet u
-       JOIN felhasznalo f ON f.id = u.felhasznalo_id
-       WHERE u.id = ?`,
-      [eredmeny.insertId]
-    );
-
-    res.status(201).json(uj);
-  } catch (err) {
-    console.error("Új fórum üzenet hiba:", err);
-    res.status(500).json({ uzenet: "Hiba az üzenet mentése során." });
   }
-});
+);
 
-
-
-// Profil
-
+// --- PROFIL --- //
 app.put("/api/profil", authMiddleware, async (req, res) => {
   try {
     const { felhasznalo_nev, profil_kep_url } = req.body;
@@ -464,70 +502,204 @@ app.put("/api/profil", authMiddleware, async (req, res) => {
   }
 });
 
-// Makettek (publikus lista)
-
+// --- MAKETTEK --- //
+// Makettek (publikus lista + szűrés)
 app.get("/api/makettek", async (req, res) => {
   try {
-    const makettek = await adatbazisLekeres("SELECT * FROM makett");
+    const { kategoria, skala, q, minPont, rendezes } = req.query;
+
+    let sql = `
+      SELECT 
+        m.*,
+        AVG(v.ertekeles) AS atlag_ertekeles,
+        COUNT(v.id) AS velemeny_db
+      FROM makett m
+      LEFT JOIN velemeny v ON v.makett_id = m.id
+    `;
+
+    const feltetelek = [];
+    const parameterek = [];
+
+    if (kategoria && kategoria !== "osszes") {
+      feltetelek.push("m.kategoria = ?");
+      parameterek.push(kategoria);
+    }
+
+    if (skala && skala !== "osszes") {
+      feltetelek.push("m.skala = ?");
+      parameterek.push(skala);
+    }
+
+    if (q && q.trim() !== "") {
+      feltetelek.push("(m.nev LIKE ? OR m.gyarto LIKE ?)");
+      const like = `%${q.trim()}%`;
+      parameterek.push(like, like);
+    }
+
+    if (feltetelek.length > 0) {
+      sql += " WHERE " + feltetelek.join(" AND ");
+    }
+
+    sql += " GROUP BY m.id";
+
+    if (minPont) {
+      sql += " HAVING COALESCE(AVG(v.ertekeles), 0) >= ?";
+      parameterek.push(Number(minPont));
+    }
+
+    if (rendezes === "ev") {
+      sql += " ORDER BY m.megjelenes_eve DESC";
+    } else if (rendezes === "ertekeles") {
+      sql += " ORDER BY atlag_ertekeles DESC";
+    } else {
+      sql += " ORDER BY m.nev ASC";
+    }
+
+    const makettek = await adatbazisLekeres(sql, parameterek);
     res.json(makettek);
   } catch (err) {
     console.error("Makettek lekérdezési hiba:", err);
-    res.status(500).json({ uzenet: "Szerver hiba a makettek lekérdezése során." });
+    res
+      .status(500)
+      .json({ uzenet: "Szerver hiba a makettek lekérdezése során." });
   }
 });
 
 // Makettek admin műveletek
-
 app.post("/api/makettek", authMiddleware, adminMiddleware, async (req, res) => {
   try {
-    const { nev, gyarto, kategoria, skala, nehezseg, megjelenes_eve, kep_url } =
-      req.body;
+    let {
+      nev,
+      gyarto,
+      kategoria,
+      skala,
+      nehezseg,
+      megjelenes_eve,
+      kep_url,
+    } = req.body;
+
+    if (!nev || !gyarto || !kategoria || !skala) {
+      return res
+        .status(400)
+        .json({ uzenet: "Név, gyártó, kategória és skála kötelező." });
+    }
+
+    const nehezsegSzam = Number(nehezseg);
+    const evSzam = Number(megjelenes_eve);
+
+    if (!Number.isFinite(nehezsegSzam) || nehezsegSzam < 1 || nehezsegSzam > 5) {
+      return res
+        .status(400)
+        .json({ uzenet: "A nehézség 1 és 5 közötti szám legyen." });
+    }
+
+    if (!Number.isFinite(evSzam) || evSzam < 1900 || evSzam > 2100) {
+      return res
+        .status(400)
+        .json({ uzenet: "A megjelenés éve 1900 és 2100 közé essen." });
+    }
 
     const eredmeny = await adatbazisLekeres(
       `INSERT INTO makett
         (nev, gyarto, kategoria, skala, nehezseg, megjelenes_eve, kep_url)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [nev, gyarto, kategoria, skala, nehezseg, megjelenes_eve, kep_url || null]
+      [
+        nev.trim(),
+        gyarto.trim(),
+        kategoria.trim(),
+        skala.trim(),
+        nehezsegSzam,
+        evSzam,
+        kep_url || null,
+      ]
     );
 
     const ujId = eredmeny.insertId;
-    const [uj] = await adatbazisLekeres(
-      "SELECT * FROM makett WHERE id = ?",
-      [ujId]
-    );
+    const [uj] = await adatbazisLekeres("SELECT * FROM makett WHERE id = ?", [
+      ujId,
+    ]);
     res.status(201).json(uj);
   } catch (err) {
     console.error("Makett létrehozási hiba:", err);
-    res.status(500).json({ uzenet: "Szerver hiba a makett létrehozása során." });
+    res
+      .status(500)
+      .json({ uzenet: "Szerver hiba a makett létrehozása során." });
   }
 });
 
-app.put("/api/makettek/:id", authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    const makettId = Number(req.params.id);
-    const { nev, gyarto, kategoria, skala, nehezseg, megjelenes_eve, kep_url } =
-      req.body;
+app.put(
+  "/api/makettek/:id",
+  authMiddleware,
+  adminMiddleware,
+  async (req, res) => {
+    try {
+      const makettId = Number(req.params.id);
+      let {
+        nev,
+        gyarto,
+        kategoria,
+        skala,
+        nehezseg,
+        megjelenes_eve,
+        kep_url,
+      } = req.body;
 
-    await adatbazisLekeres(
-      `UPDATE makett
-       SET nev = ?, gyarto = ?, kategoria = ?, skala = ?, nehezseg = ?, megjelenes_eve = ?, kep_url = ?
-       WHERE id = ?`,
-      [nev, gyarto, kategoria, skala, nehezseg, megjelenes_eve, kep_url || null, makettId]
-    );
+      if (!nev || !gyarto || !kategoria || !skala) {
+        return res
+          .status(400)
+          .json({ uzenet: "Név, gyártó, kategória és skála kötelező." });
+      }
 
-    const [uj] = await adatbazisLekeres(
-      "SELECT * FROM makett WHERE id = ?",
-      [makettId]
-    );
-    res.json(uj);
-  } catch (err) {
-    console.error("Makett módosítási hiba:", err);
-    res.status(500).json({ uzenet: "Szerver hiba a makett módosítása során." });
+      const nehezsegSzam = Number(nehezseg);
+      const evSzam = Number(megjelenes_eve);
+
+      if (
+        !Number.isFinite(nehezsegSzam) ||
+        nehezsegSzam < 1 ||
+        nehezsegSzam > 5
+      ) {
+        return res
+          .status(400)
+          .json({ uzenet: "A nehézség 1 és 5 közötti szám legyen." });
+      }
+
+      if (!Number.isFinite(evSzam) || evSzam < 1900 || evSzam > 2100) {
+        return res
+          .status(400)
+          .json({ uzenet: "A megjelenés éve 1900 és 2100 közé essen." });
+      }
+
+      await adatbazisLekeres(
+        `UPDATE makett
+         SET nev = ?, gyarto = ?, kategoria = ?, skala = ?, nehezseg = ?, megjelenes_eve = ?, kep_url = ?
+         WHERE id = ?`,
+        [
+          nev.trim(),
+          gyarto.trim(),
+          kategoria.trim(),
+          skala.trim(),
+          nehezsegSzam,
+          evSzam,
+          kep_url || null,
+          makettId,
+        ]
+      );
+
+      const [uj] = await adatbazisLekeres(
+        "SELECT * FROM makett WHERE id = ?",
+        [makettId]
+      );
+      res.json(uj);
+    } catch (err) {
+      console.error("Makett módosítási hiba:", err);
+      res
+        .status(500)
+        .json({ uzenet: "Szerver hiba a makett módosítása során." });
+    }
   }
-});
+);
 
-// Vélemények (publikus lista + egy makett véleményei)
-
+// --- VÉLEMÉNYEK --- //
 app.get("/api/velemenyek", async (req, res) => {
   try {
     const velemenyek = await adatbazisLekeres(
@@ -541,7 +713,9 @@ app.get("/api/velemenyek", async (req, res) => {
     res.json(velemenyek);
   } catch (err) {
     console.error("Vélemények lekérdezési hiba:", err);
-    res.status(500).json({ uzenet: "Szerver hiba a vélemények lekérdezése során." });
+    res
+      .status(500)
+      .json({ uzenet: "Szerver hiba a vélemények lekérdezése során." });
   }
 });
 
@@ -560,12 +734,44 @@ app.get("/api/makettek/:id/velemenyek", async (req, res) => {
     res.json(velemenyek);
   } catch (err) {
     console.error("Makett vélemények lekérdezési hiba:", err);
-    res.status(500).json({ uzenet: "Szerver hiba a makett véleményeinek lekérdezése során." });
+    res.status(500).json({
+      uzenet: "Szerver hiba a makett véleményeinek lekérdezése során.",
+    });
+  }
+});
+
+// Saját vélemények – csak bejelentkezve
+app.get("/api/sajat/velemenyek", authMiddleware, async (req, res) => {
+  try {
+    const felhasznaloId = req.felhasznalo.id;
+
+    const sorok = await adatbazisLekeres(
+      `SELECT v.id,
+              v.makett_id,
+              v.szoveg,
+              v.ertekeles,
+              v.letrehozva,
+              m.nev AS makett_nev,
+              m.gyarto,
+              m.skala,
+              m.kategoria
+       FROM velemeny v
+       JOIN makett m ON m.id = v.makett_id
+       WHERE v.felhasznalo_id = ?
+       ORDER BY v.letrehozva DESC`,
+      [felhasznaloId]
+    );
+
+    res.json(sorok);
+  } catch (err) {
+    console.error("Saját vélemények lekérdezési hiba:", err);
+    res
+      .status(500)
+      .json({ uzenet: "Szerver hiba a saját vélemények lekérdezése során." });
   }
 });
 
 // Vélemény létrehozása – csak bejelentkezve
-
 app.post("/api/makettek/:id/velemenyek", authMiddleware, async (req, res) => {
   try {
     const makettId = Number(req.params.id);
@@ -578,7 +784,9 @@ app.post("/api/makettek/:id/velemenyek", authMiddleware, async (req, res) => {
 
     const ertek = Number(ertekeles);
     if (!(ertek >= 1 && ertek <= 5)) {
-      return res.status(400).json({ uzenet: "Az értékelés 1 és 5 között lehet." });
+      return res
+        .status(400)
+        .json({ uzenet: "Az értékelés 1 és 5 között lehet." });
     }
 
     const eredmeny = await adatbazisLekeres(
@@ -601,12 +809,13 @@ app.post("/api/makettek/:id/velemenyek", authMiddleware, async (req, res) => {
     res.status(201).json(uj);
   } catch (err) {
     console.error("Vélemény mentési hiba:", err);
-    res.status(500).json({ uzenet: "Szerver hiba a vélemény mentése során." });
+    res
+      .status(500)
+      .json({ uzenet: "Szerver hiba a vélemény mentése során." });
   }
 });
 
 // Vélemény módosítása – csak saját vagy admin
-
 app.put("/api/velemenyek/:id", authMiddleware, async (req, res) => {
   try {
     const velemenyId = Number(req.params.id);
@@ -629,7 +838,9 @@ app.put("/api/velemenyek/:id", authMiddleware, async (req, res) => {
 
     const ertek = Number(ertekeles);
     if (!(ertek >= 1 && ertek <= 5)) {
-      return res.status(400).json({ uzenet: "Az értékelés 1 és 5 között lehet." });
+      return res
+        .status(400)
+        .json({ uzenet: "Az értékelés 1 és 5 között lehet." });
     }
 
     await adatbazisLekeres(
@@ -651,12 +862,13 @@ app.put("/api/velemenyek/:id", authMiddleware, async (req, res) => {
     res.json(uj);
   } catch (err) {
     console.error("Vélemény módosítási hiba:", err);
-    res.status(500).json({ uzenet: "Szerver hiba a vélemény módosítása során." });
+    res
+      .status(500)
+      .json({ uzenet: "Szerver hiba a vélemény módosítása során." });
   }
 });
 
 // Vélemény törlése – csak saját vagy admin
-
 app.delete("/api/velemenyek/:id", authMiddleware, async (req, res) => {
   try {
     const velemenyId = Number(req.params.id);
@@ -680,12 +892,13 @@ app.delete("/api/velemenyek/:id", authMiddleware, async (req, res) => {
     res.json({ uzenet: "Vélemény törölve." });
   } catch (err) {
     console.error("Vélemény törlési hiba:", err);
-    res.status(500).json({ uzenet: "Szerver hiba a vélemény törlése során." });
+    res
+      .status(500)
+      .json({ uzenet: "Szerver hiba a vélemény törlése során." });
   }
 });
 
-// Kedvencek – csak bejelentkezve
-
+// --- KEDVENCEK --- //
 app.get("/api/kedvencek", authMiddleware, async (req, res) => {
   try {
     const userId = req.felhasznalo.id;
@@ -699,7 +912,9 @@ app.get("/api/kedvencek", authMiddleware, async (req, res) => {
     res.json(sorok);
   } catch (err) {
     console.error("Kedvencek lekérdezési hiba:", err);
-    res.status(500).json({ uzenet: "Szerver hiba a kedvencek lekérdezése során." });
+    res
+      .status(500)
+      .json({ uzenet: "Szerver hiba a kedvencek lekérdezése során." });
   }
 });
 
@@ -717,7 +932,9 @@ app.post("/api/kedvencek/:makettId", authMiddleware, async (req, res) => {
     res.status(201).json({ uzenet: "Hozzáadva a kedvencekhez." });
   } catch (err) {
     console.error("Kedvencek hozzáadási hiba:", err);
-    res.status(500).json({ uzenet: "Szerver hiba a kedvencek módosítása során." });
+    res
+      .status(500)
+      .json({ uzenet: "Szerver hiba a kedvencek módosítása során." });
   }
 });
 
@@ -734,38 +951,162 @@ app.delete("/api/kedvencek/:makettId", authMiddleware, async (req, res) => {
     res.json({ uzenet: "Eltávolítva a kedvencek közül." });
   } catch (err) {
     console.error("Kedvencek törlési hiba:", err);
-    res.status(500).json({ uzenet: "Szerver hiba a kedvencek módosítása során." });
+    res
+      .status(500)
+      .json({ uzenet: "Szerver hiba a kedvencek módosítása során." });
   }
 });
 
+// --- PROFILKÉP FELTÖLTÉS ENDPOINT --- //
+app.post(
+  "/api/profil/feltoltes",
+  authMiddleware,
+  upload.single("profilkep"),
+  async (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ uzenet: "Nincs feltöltött fájl." });
+    }
+
+    const kepUrl = "/uploads/" + req.file.filename;
+
+    try {
+      await adatbazisLekeres(
+        "UPDATE felhasznalo SET profil_kep_url = ? WHERE id = ?",
+        [kepUrl, req.felhasznalo.id]
+      );
+
+      return res.json({
+        uzenet: "Profilkép frissítve.",
+        kepUrl,
+      });
+    } catch (err) {
+      console.error("Profilkép mentési hiba:", err);
+      return res
+        .status(500)
+        .json({ uzenet: "Hiba adatbázis mentés közben." });
+    }
+  }
+);
+
+// --- ÉPÍTÉSI NAPLÓK --- //
+// Építési naplók – publikus lista
+app.get("/api/epitesinaplo", async (req, res) => {
+  try {
+    const sorok = await adatbazisLekeres(
+      `SELECT e.id,
+              e.makett_id,
+              e.cim,
+              e.leiras,
+              e.kep_url,
+              e.letrehozva,
+              m.nev AS makett_nev,
+              m.gyarto,
+              m.skala,
+              f.felhasznalo_nev
+       FROM epitesi_naplo e
+       JOIN makett m ON m.id = e.makett_id
+       JOIN felhasznalo f ON f.id = e.felhasznalo_id
+       ORDER BY e.letrehozva DESC`
+    );
+    res.json(sorok);
+  } catch (err) {
+    console.error("Építési napló lekérdezési hiba:", err);
+    res
+      .status(500)
+      .json({ uzenet: "Szerver hiba az építési napló lekérdezése során." });
+  }
+});
+
+// Saját építési naplók
+app.get("/api/epitesinaplo/sajat", authMiddleware, async (req, res) => {
+  try {
+    const felhasznaloId = req.felhasznalo.id;
+
+    const sorok = await adatbazisLekeres(
+      `SELECT e.id,
+              e.makett_id,
+              e.cim,
+              e.leiras,
+              e.kep_url,
+              e.letrehozva,
+              m.nev AS makett_nev,
+              m.gyarto,
+              m.skala
+       FROM epitesi_naplo e
+       JOIN makett m ON m.id = e.makett_id
+       WHERE e.felhasznalo_id = ?
+       ORDER BY e.letrehozva DESC`,
+      [felhasznaloId]
+    );
+
+    res.json(sorok);
+  } catch (err) {
+    console.error("Saját építési napló lekérdezési hiba:", err);
+    res
+      .status(500)
+      .json({ uzenet: "Szerver hiba az építési naplók lekérdezése során." });
+  }
+});
+
+// Új építési napló bejegyzés
+app.post("/api/epitesinaplo", authMiddleware, async (req, res) => {
+  try {
+    const felhasznaloId = req.felhasznalo.id;
+    const { makett_id, cim, leiras, kep_url } = req.body;
+
+    const makettId = Number(makett_id);
+    if (!Number.isFinite(makettId)) {
+      return res
+        .status(400)
+        .json({ uzenet: "Érvénytelen makett azonosító." });
+    }
+
+    if (!cim || !leiras) {
+      return res
+        .status(400)
+        .json({ uzenet: "Cím és leírás megadása kötelező." });
+    }
+
+    const eredmeny = await adatbazisLekeres(
+      `INSERT INTO epitesi_naplo (makett_id, felhasznalo_id, cim, leiras, kep_url)
+       VALUES (?, ?, ?, ?, ?)`,
+      [makettId, felhasznaloId, cim.trim(), leiras.trim(), kep_url || null]
+    );
+
+    const ujId = eredmeny.insertId;
+    const [uj] = await adatbazisLekeres(
+      `SELECT e.id,
+              e.makett_id,
+              e.cim,
+              e.leiras,
+              e.kep_url,
+              e.letrehozva,
+              m.nev AS makett_nev,
+              m.gyarto,
+              m.skala,
+              f.felhasznalo_nev
+       FROM epitesi_naplo e
+       JOIN makett m ON m.id = e.makett_id
+       JOIN felhasznalo f ON f.id = e.felhasznalo_id
+       WHERE e.id = ?`,
+      [ujId]
+    );
+
+    res.status(201).json(uj);
+  } catch (err) {
+    console.error("Építési napló létrehozási hiba:", err);
+    res
+      .status(500)
+      .json({ uzenet: "Szerver hiba az építési napló létrehozása során." });
+  }
+});
+
+// --- GYÖKÉR ENDPOINT --- //
 app.get("/", (req, res) => {
   res.send("Makett API fut.");
 });
 
-// === PROFILKÉP FELTÖLTÉSE === //
-app.post("/api/profil/feltoltes", authMiddleware, upload.single("profilkep"), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ uzenet: "Nincs feltöltött fájl." });
-  }
-
-  const kepUrl = "/uploads/" + req.file.filename;
-
-  try {
-    await adatbazisPool.query(
-      "UPDATE felhasznalo SET profil_kep_url = ? WHERE id = ?",
-      [kepUrl, req.user.id]
-    );
-
-    return res.json({
-      uzenet: "Profilkép frissítve.",
-      kepUrl,
-    });
-  } catch (err) {
-    return res.status(500).json({ uzenet: "Hiba adatbázis mentés közben." });
-  }
-});
-
-
+// --- INDÍTÁS --- //
 inicializalAdatbazis()
   .then(() => {
     app.listen(PORT, () => {
