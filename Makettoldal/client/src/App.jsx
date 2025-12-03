@@ -9,7 +9,10 @@ import Makettek from "./pages/Makettek";
 import Bejelentkezes from "./pages/Bejelentkezes";
 import Regisztracio from "./pages/Regisztracio";
 import Profil from "./pages/Profil";
-import Forum from "./pages/Forum"; // ha nincs Forum.jsx, ezt és a route-ot lent töröld
+import Forum from "./pages/Forum"; 
+import Rolunk from "./pages/Rolunk";
+import NavBar from "./components/NavBar";
+
 
 import AiChatWidget from "./components/AiChatWidget";
 
@@ -60,66 +63,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="nav">
-        <div className="nav-left">
-          <span className="logo">Makettező Klub</span>
-
-          <NavLink to="/" className="nav-link">
-            Kezdőlap
-          </NavLink>
-          <NavLink to="/makettek" className="nav-link">
-            Makettek
-          </NavLink>
-          <NavLink to="/forum" className="nav-link">
-            Fórum
-          </NavLink>
-
-          {bejelentkezve && (
-            <>
-              <NavLink to="/kedvencek" className="nav-link">
-                Kedvenceim
-              </NavLink>
-              <NavLink to="/velemenyeim" className="nav-link">
-                Véleményeim
-              </NavLink>
-              <NavLink to="/epitesinaplo" className="nav-link">
-                Építési napló
-              </NavLink>
-            </>
-          )}
-
-
-          {admin && <span className="nav-badge">Admin</span>}
-        </div>
-
-        <div className="nav-right">
-          {bejelentkezve ? (
-            <>
-              <Link to="/profil" className="nav-profile">
-                <AvatarKicsi
-                  nev={felhasznalo.felhasznalo_nev}
-                  profilKepUrl={felhasznalo.profil_kep_url}
-                />
-                <span className="nav-user-name">
-                  {felhasznalo.felhasznalo_nev}
-                </span>
-              </Link>
-              <button className="nav-btn" onClick={kijelentkezes}>
-                Kijelentkezés
-              </button>
-            </>
-          ) : (
-            <>
-              <NavLink to="/bejelentkezes" className="nav-link">
-                Bejelentkezés
-              </NavLink>
-              <NavLink to="/regisztracio" className="nav-link">
-                Regisztráció
-              </NavLink>
-            </>
-          )}
-        </div>
-      </header>
+      <NavBar />
 
       <main className="main">
           <Routes>
@@ -132,6 +76,7 @@ export default function App() {
           <Route path="/velemenyeim" element={<SajatVelemenyek />} />
           <Route path="/kedvencek" element={<Kedvencek />} />
           <Route path="/epitesinaplo" element={<EpitesiNaplo />} />
+          <Route path="/rolunk" element={<Rolunk />} />
         </Routes>
 
       </main>
